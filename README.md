@@ -1,59 +1,22 @@
 # FUD
 
-Turn an iPhone or iPad into an extra display for your Mac. Two ways in one
-app:
+Turn an iPad (iOS 5+) or iPhone (I mean you can if you want to) into an extra display for your Mac (or iPhone). It supports AirPlay (audio and video, not separately) and custom macOS 13+ server (for multiple devices simultaneously and also USB connection for iOS 9 and higher (maybe even 10 or higher, needs testing, for sure works on iPadOS 12)).
 
-- **FUD mode** — a small menu-bar app on your Mac creates a virtual display for the
-  device and streams it over the local network. Plug the device in
-  over USB and the video automatically prefers the cable; unplug it and the
-  stream hops to Wi-Fi in about a second, no restart.
-- **AirPlay mode** — the same device shows up in your Mac's Screen
-  Mirroring menu like an Apple TV. Nothing to configure.
+## Installation
+For iOS 5-7 install deb package (because VideoToolbox is private on these iOSes and app sandbox doesn't allow loading private libraries), for 8+ you can choose between deb and ipa (not signed, use AppSync or Sideloadly or whatever). If you want multiple devices at once or USB connection (for lower latency, for example) you need to install macOS app (just download ZIP and put FUD.app wherever you like).
 
-Works on absurdly old hardware: the client runs from iOS 5.1 to current iPadOS, with hardware video decoding all the way down.
-Tested on iPad 2 (iOS 6.1) and iPad mini 2 (iPadOS 12.5.8).
+## Using
+Just open an app on your iDevice and connect to it via AirPlay or FUD server. FUD server has different settings (quality, scaling, fps and others), AirPlay is controlled by macOS (or iOS, you can connect any iDevice with AirPlay support). 
 
-## What it looks like in daily use
-
-- Open FUD on the device. It sits there showing its name.
-- On the Mac, the menu-bar app lists every device it can see. Press
-  «Подключить» / Connect, type the PIN shown on the device's screen (once
-  per device — after that it just connects), and the display appears.
-- Lock the device, walk away, come back — the stream picks itself back up.
-- Per-device settings (resolution, codec, fps, bitrate) live in the
-  device's settings window on the Mac; the Mac remembers them.
-- For AirPlay, just pick the device in Control Center → Screen Mirroring.
-
-## Installing
-
-Grab the latest release:
-
-- **The Mac server**: `FUD.app` — unzip anywhere, run. It lives in the menu
-  bar. On first launch macOS asks for Local Network permission (needed to
-  find devices). For virtual displays with arbitrary aspect ratios it can
-  use [BetterDisplay](https://github.com/waydabber/BetterDisplay) if you
-  have it; otherwise it falls back to its own virtual display.
-- **The iOS client**, one binary, two packages:
-  - `FUD.ipa` — for iOS 8 and later. Install with your favourite
-    sideloading tool.
-  - `com.duckyouryan.fud.deb` — for jailbroken devices, iOS 5 and later.
-    This one is required on iOS 5–7: only a jailbreak install gets hardware
-    video decode there (Apple's app container blocks it).
-
-## Notes and fine print
-
-- Everything happens on your local network. No accounts, no cloud, nothing
-  leaves the LAN.
-- Pairing is protected by a one-time PIN (no-auth pairing is also possible), after
-  which the Mac holds a token.
-- The AirPlay receiver speaks to current macOS (tested against macOS 26),
-  including its newer expectations like the event channel.
-
+## Possible issues
+- App icon on iOS has white corners, too lazy to deal with it
+- Might not appear in server app or AirPlay list or stop streaming after first frame or something like that - just reconnect or restart client app (or server). It was mostly fixed but still might happen (though it didn't happen during testing)
+- Anything really (let me know)
 
 ## Building from source
 
 Requirements: Xcode (26 known-good) for the server; for the client,
-[Theos](https://theos.dev) with `iPhoneOS11.4.sdk`, `ldid`, and
+[Theos](https://theos.dev) with `iPhoneOS11.4.sdk` and `iPhoneOS6.1.sdk`, `ldid`, and
 `libimobiledevice` + `ideviceinstaller` for device installs.
 
 Then:
