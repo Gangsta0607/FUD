@@ -1,0 +1,212 @@
+#!/usr/bin/env zsh
+# FUD build and deploy tool.
+#
+#   ./fud build  ipa|deb|server|client|all [--release]
+#   ./fud deploy ipa|deb|server|client|all
+#   ./fud clean [--all]
+#   ./fud devices
+#   ./fud logs <client-ip>
+#
+# Artifacts (dist/):
+#   FUD.app                 macOS server, Release
+#   FUD.ipa                 iOS client, fat armv7+arm64, container install, iOS 8+
+#   com.duckyouryan.fud.deb iOS client, fat armv7+arm64, /Applications install
+#                           (jailbreak), iOS 5+ - the only way to get hardware
+#                           video decode on iOS 5-7 (container sandbox blocks it)
+#
+# Build caches live in build/, final artifacts in dist/.
+# deploy builds the artifact first if dist/ does not have it.
+set -e
+SCRIPT="${0:a}"
+cd "${0:a:h}"
+
+BUILD_DIR=build
+DIST_DIR=dist
+LAST_IP_FILE=$BUILD_DIR/last-client-ip
+RELEASE=0
+
+usage() {
+  sed -n '2,16p' "$SCRIPT"
+  exit ${1:-0}
+}
+
+err() { echo "fud: $*" >&2; exit 1; }
+
+for a in "$@"; do
+  [[ $a == --release ]] && RELEASE=1
+done
+args=(${@:#--release})
+cmd=${args[1]:-}
+target=${args[2]:-}
+
+[[ -z $cmd ]] && usage 1
+
+build_deb() {
+  echo "==> Building client .deb (fat armv7+arm64)"
+  if (( RELEASE )); then
+    (cd FUDClient && make deb FINALPACKAGE=1)
+  else
+    (cd FUDClient && make deb)
+  fi
+  mkdir -p $DIST_DIR
+  local deb=($BUILD_DIR/client/packages/*.deb(om[1]))
+  [[ -f $deb[1] ]] || err "deb build produced nothing in $BUILD_DIR/client/packages"
+  cp $deb[1] $DIST_DIR/com.duckyouryan.fud.deb
+  echo "==> dist/com.duckyouryan.fud.deb"
+}
+
+build_ipa() {
+  echo "==> Building client .ipa (fat armv7+arm64)"
+  if (( RELEASE )); then
+    (cd FUDClient && make ipa FINALPACKAGE=1)
+  else
+    (cd FUDClient && make ipa)
+  fi
+  mkdir -p $DIST_DIR
+  cp FUDClient/FUD.ipa $DIST_DIR/FUD.ipa
+  echo "==> dist/FUD.ipa"
+}
+
+build_server() {
+  echo "==> Building macOS server (Release)"
+  (cd FUD && xcodebuild -scheme FUD -configuration Release \
+    -destination "platform=macOS,arch=arm64" \
+    -derivedDataPath ../$BUILD_DIR/server/DerivedData build -quiet)
+  mkdir -p $DIST_DIR
+  rm -rf $DIST_DIR/FUD.app
+  ditto $BUILD_DIR/server/DerivedData/Build/Products/Release/FUD.app $DIST_DIR/FUD.app
+  echo "==> dist/FUD.app"
+}
+
+list_devices() {
+  command -v idevice_id >/dev/null || err "idevice_id not found - install libimobiledevice (brew install libimobiledevice)"
+  local udids=(${(@f)$(idevice_id -l)})
+  [[ ${#udids} -gt 0 ]] || err "no iOS devices connected (check USB and trust dialog)"
+  local i
+  for i in {1..${#udids}}; do
+    local name ver
+    name=$(ideviceinfo -u ${udids[$i]} -k DeviceName 2>/dev/null || echo "?")
+    ver=$(ideviceinfo -u ${udids[$i]} -k ProductVersion 2>/dev/null || echo "?")
+    echo "  $i) $name (iOS $ver) [${udids[$i]}]"
+  done
+  return 0
+}
+
+deploy_ipa() {
+  [[ -f $DIST_DIR/FUD.ipa ]] || build_ipa
+  command -v ideviceinstaller >/dev/null || err "ideviceinstaller not found - install ideviceinstaller (brew install ideviceinstaller)"
+  echo "Connected devices:"
+  list_devices
+  local udids=(${(@f)$(idevice_id -l)})
+  local udid
+  if [[ ${#udids} -eq 1 ]]; then
+    # Only one device plugged in: the question answers itself.
+    udid=${udids[1]}
+    echo "==> Only one device connected, using it"
+  else
+    echo -n "Install dist/FUD.ipa to which device? [1-${#udids}]: "
+    local choice
+    read choice
+    [[ $choice == <-> && $choice -ge 1 && $choice -le ${#udids} ]] || err "invalid choice"
+    udid=${udids[$choice]}
+  fi
+  echo "==> Installing on $udid"
+  # A running app keeps serving the old code after an in-place install.
+  # Jailbroken target with known SSH (build/last-client-ip) - kill it first.
+  if [[ -f $LAST_IP_FILE ]]; then
+    local lastip=$(cat $LAST_IP_FILE)
+    FUD_IPAD_IP=$lastip FUDClient/tools/ipad.sh 'killall FUD 2>/dev/null' 2>/dev/null || true
+  fi
+  ideviceinstaller -n -u "$udid" install $DIST_DIR/FUD.ipa || \
+    ideviceinstaller -n -u "$udid" upgrade $DIST_DIR/FUD.ipa
+  echo "==> Installed. Relaunch the app on the device."
+}
+
+deploy_deb() {
+  [[ -f $DIST_DIR/com.duckyouryan.fud.deb ]] || build_deb
+  local last=""
+  [[ -f $LAST_IP_FILE ]] && last=$(cat $LAST_IP_FILE)
+  echo -n "Client IPs (comma/space separated, host[:port])${last:+ [$last]}: "
+  local input
+  read input
+  [[ -z $input ]] && input=$last
+  [[ -n $input ]] || err "no IP given and no last-used IP stored"
+  echo -n "$input" > $LAST_IP_FILE
+  local -a hosts=(${(@s:,:)${input// /,}})  # spaces and commas both split
+  local -a failed=()
+  local h host port
+  for h in $hosts; do
+    [[ -z $h ]] && continue
+    host=$h; port=22
+    if [[ $h == *:* ]]; then host=${h%%:*}; port=${h##*:}; fi
+    echo "==> Installing .deb on $host:$port via SSH -> /Applications"
+    # Kill the running app first: dpkg overwrites its files under it, and the
+    # old process would keep serving the old code until relaunched.
+    if ! cat $DIST_DIR/com.duckyouryan.fud.deb | FUD_IPAD_IP=$host FUD_IPAD_PORT=$port FUDClient/tools/ipad.sh \
+      'killall FUD 2>/dev/null; cat > /var/mobile/fud.deb && dpkg -i /var/mobile/fud.deb; rc=$?; rm -f /var/mobile/fud.deb; exit $rc'; then
+      failed+=($h)
+      echo "fud: install on $h failed - reachable over SSH? (root, see FUDClient/tools/ipad.sh)" >&2
+    fi
+  done
+  if (( ${#failed} )); then
+    err "failed on: ${(j:, :)failed}"
+  fi
+}
+
+deploy_server() {
+  [[ -d $DIST_DIR/FUD.app ]] || build_server
+  echo "==> Installing server to /Applications/FUD.app"
+  # A running server would keep the old binary (and its pairings state) in
+  # memory; NSApp.terminate semantics are what tear the virtual displays down,
+  # but a plain TERM still lets it die before we swap the bundle.
+  pkill -x FUD 2>/dev/null && sleep 1
+  rm -rf /Applications/FUD.app
+  ditto $DIST_DIR/FUD.app /Applications/FUD.app
+}
+
+case $cmd in
+  build)
+    case $target in
+      ipa)    build_ipa ;;
+      deb)    build_deb ;;
+      server) build_server ;;
+      client) build_deb; build_ipa ;;
+      all)    build_deb; build_ipa; build_server ;;
+      *)      err "unknown build target '$target' (ipa|deb|server|client|all)" ;;
+    esac
+    ;;
+  deploy)
+    case $target in
+      ipa)    deploy_ipa ;;
+      deb)    deploy_deb ;;
+      server) deploy_server ;;
+      client) deploy_deb; deploy_ipa ;;
+      all)    deploy_deb; deploy_ipa; deploy_server ;;
+      *)      err "unknown deploy target '$target' (ipa|deb|server|client|all)" ;;
+    esac
+    ;;
+  clean)
+    rm -rf $BUILD_DIR FUDClient/FUD.ipa
+    echo "==> removed $BUILD_DIR/"
+    if [[ ${args[(I)--all]} -gt 0 ]]; then
+      rm -rf $DIST_DIR
+      echo "==> removed $DIST_DIR/"
+    fi
+    ;;
+  devices)
+    echo "Connected devices:"
+    list_devices
+    ;;
+  logs)
+    local ip=${args[2]:-}
+    [[ -n $ip ]] || err "usage: ./fud logs <client-ip>"
+    # The deb install logs to /var/mobile, the ipa to its container; take
+    # whichever is fresher.
+    FUD_IPAD_IP=$ip FUDClient/tools/ipad.sh '
+      if [ -f /var/mobile/fud_debug.log ]; then cat /var/mobile/fud_debug.log
+      else cat "$(ls -t /var/mobile/Containers/Data/Application/*/Documents/fud_debug.log 2>/dev/null | head -1)"; fi'
+    ;;
+  *)
+    usage 1
+    ;;
+esac
