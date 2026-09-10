@@ -3,16 +3,15 @@
 Turn an iPhone or iPad into an extra display for your Mac. Two ways in one
 app:
 
-- **FUD mode** — a small menu-bar app on your Mac creates a display for the
-  device (a real one you drag windows onto, or a virtual one that exists
-  only for it), and streams it over the local network. Plug the device in
+- **FUD mode** — a small menu-bar app on your Mac creates a virtual display for the
+  device and streams it over the local network. Plug the device in
   over USB and the video automatically prefers the cable; unplug it and the
   stream hops to Wi-Fi in about a second, no restart.
 - **AirPlay mode** — the same device shows up in your Mac's Screen
   Mirroring menu like an Apple TV. Nothing to configure.
 
-Works on absurdly old hardware: the client runs from iOS 5.1 (the original
-iPad 2) to current iPadOS, with hardware video decoding all the way down.
+Works on absurdly old hardware: the client runs from iOS 5.1 to current iPadOS, with hardware video decoding all the way down.
+Tested on iPad 2 (iOS 6.1) and iPad mini 2 (iPadOS 12.5.8).
 
 ## What it looks like in daily use
 
@@ -45,20 +44,13 @@ Grab the latest release:
 
 - Everything happens on your local network. No accounts, no cloud, nothing
   leaves the LAN.
-- Pairing is protected by a one-time PIN (toggleable on the device), after
+- Pairing is protected by a one-time PIN (no-auth pairing is also possible), after
   which the Mac holds a token.
 - The AirPlay receiver speaks to current macOS (tested against macOS 26),
   including its newer expectations like the event channel.
-- AirPlay mirroring wants Wi-Fi: when a Mac's link is wired (and USB
-  tethering counts as wired), macOS insists on HEVC above 1080p, which
-  pre-A9 devices cannot decode. Wired streaming is what FUD mode is for —
-  it encodes H.264 itself and happily uses the cable.
+
 
 ## Building from source
-
-The project is versioned with [Fossil](https://fossil-scm.org), not git:
-clone or open `fud-server.fossil` (macOS app) and `fud-client.fossil`
-(iOS app).
 
 Requirements: Xcode (26 known-good) for the server; for the client,
 [Theos](https://theos.dev) with `iPhoneOS11.4.sdk`, `ldid`, and
@@ -86,3 +78,5 @@ remembers the address for next time; `deploy server` installs to
 - `docs/TECHNICAL.md` — how both apps work inside: workflows, the uxplay
   delta, the suspension-survival design, the build tricks, and the rest of
   the hard-won knowledge.
+
+Parts of https://github.com/fdh2/uxplay were used for that project.
